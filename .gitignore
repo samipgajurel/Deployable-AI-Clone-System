@@ -1,16 +1,6 @@
-# Python
+venv/
 __pycache__/
 *.pyc
-
-# Virtual env
-venv/
-
-# Database (will be created on server)
 interns.db
-
-# Uploaded datasets (we upload later via API)
 data/*.csv
-
-# OS junk
-.DS_Store
-Thumbs.db
+.env
