@@ -2,9 +2,9 @@ import os
 import shutil
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 
-from db import init_db, connect
+from db import init_db, connect, is_postgres
 from ingest import run_ingest
 from ai_clone import generate_ai_clone
 
@@ -14,18 +14,32 @@ app = FastAPI(title="Deployable AI Clone System")
 def startup():
     init_db()
 
+# ---------- Helpers ----------
+def placeholder():
+    return "%s" if is_postgres() else "?"
+
+def row_to_dict(row):
+    """Works for sqlite Row, psycopg2 RealDictCursor, or tuple fallback."""
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row
+    try:
+        return dict(row)
+    except Exception:
+        # tuple fallback (should not happen if RealDictCursor is used)
+        return {"data": row}
+
+# ---------- Schemas ----------
 class FeedbackIn(BaseModel):
     supervisor_name: str = "Samip Gajurel"
     note: str
     rating: Optional[int] = None  # 1-5
 
+# ---------- Routes ----------
 @app.get("/")
 def root():
-    return {
-        "status": "running",
-        "docs": "/docs",
-        "health": "/health"
-    }
+    return {"status": "running", "docs": "/docs", "health": "/health"}
 
 @app.get("/health")
 def health():
@@ -47,51 +61,66 @@ async def upload_dataset(file: UploadFile = File(...)):
 
     return {"message": "Dataset uploaded + ingested + RAG rebuilt", "interns_imported": n}
 
-# ✅ List interns
+# ✅ List interns (matches your ingest schema)
 @app.get("/interns")
 def list_interns():
+    ph = placeholder()
     conn = connect()
     cur = conn.cursor()
-    rows = cur.execute("""
-        SELECT id_info, intern_no, name, email, learning_skill, status, working_on_project
+
+    # Your ingest inserts columns:
+    # id_info, name, email, learning_skill, working_on_project, progress_month1, knowledge_gained, progress_rating_num
+    cur.execute("""
+        SELECT id_info, name, email, learning_skill, working_on_project,
+               progress_month1, knowledge_gained, progress_rating_num
         FROM interns
-        ORDER BY start_date, intern_no
-    """).fetchall()
+        ORDER BY id_info
+    """)
+    rows = cur.fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+
+    # rows may already be dicts (RealDictCursor) or sqlite Rows
+    return [row_to_dict(r) for r in rows]
 
 # ✅ Intern detail
 @app.get("/interns/{intern_id}")
 def intern_detail(intern_id: str):
+    ph = placeholder()
     conn = connect()
     cur = conn.cursor()
-    row = cur.execute("SELECT * FROM interns WHERE id_info=?", (intern_id,)).fetchone()
+
+    cur.execute(f"SELECT * FROM interns WHERE id_info={ph}", (intern_id,))
+    row = cur.fetchone()
     conn.close()
+
     if not row:
         raise HTTPException(status_code=404, detail="Intern not found")
-    return dict(row)
+
+    return row_to_dict(row)
 
 # ✅ Save supervisor feedback
 @app.post("/interns/{intern_id}/feedback")
 def add_feedback(intern_id: str, body: FeedbackIn):
+    ph = placeholder()
     conn = connect()
     cur = conn.cursor()
 
     # ensure intern exists
-    chk = cur.execute("SELECT id_info FROM interns WHERE id_info=?", (intern_id,)).fetchone()
+    cur.execute(f"SELECT id_info FROM interns WHERE id_info={ph}", (intern_id,))
+    chk = cur.fetchone()
     if not chk:
         conn.close()
         raise HTTPException(status_code=404, detail="Intern not found")
 
-    if os.getenv("DATABASE_URL"):
-        cur.execute("""
+    if is_postgres():
+        cur.execute(f"""
             INSERT INTO supervisor_feedback(intern_id_info, supervisor_name, note, rating)
-            VALUES (%s,%s,%s,%s)
+            VALUES ({ph},{ph},{ph},{ph})
         """, (intern_id, body.supervisor_name, body.note, body.rating))
     else:
-        cur.execute("""
+        cur.execute(f"""
             INSERT INTO supervisor_feedback(intern_id_info, supervisor_name, note, rating, created_at)
-            VALUES (?,?,?,?,datetime('now'))
+            VALUES ({ph},{ph},{ph},{ph},datetime('now'))
         """, (intern_id, body.supervisor_name, body.note, body.rating))
 
     conn.commit()
@@ -101,10 +130,13 @@ def add_feedback(intern_id: str, body: FeedbackIn):
 # ✅ AI clone: saves feedback + returns AI output (RAG + history)
 @app.post("/interns/{intern_id}/ai-clone")
 def ai_clone(intern_id: str, body: FeedbackIn):
-    # save feedback first
+    # store feedback
     add_feedback(intern_id, body)
-    # generate result
-    return generate_ai_clone(intern_id, body.note)
-@app.get("/health")
-def health():
-    return {"ok": True}
+
+    # generate AI response (make sure ai_clone.py uses correct placeholders too)
+    try:
+        result = generate_ai_clone(intern_id, body.note)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI clone error: {str(e)}")
+
+    return result
