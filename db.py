@@ -1,29 +1,39 @@
 import os
 import sqlite3
 
+def is_postgres() -> bool:
+    return bool(os.getenv("DATABASE_URL"))
+
 def connect():
-    # Railway provides DATABASE_URL for Postgres
-    if os.getenv("DATABASE_URL"):
+    """
+    Returns a DB connection.
+    - Railway: Postgres via psycopg2 (dict rows)
+    - Local: SQLite (sqlite3.Row)
+    """
+    if is_postgres():
         import psycopg2
         from psycopg2.extras import RealDictCursor
 
-        db_url = os.getenv("DATABASE_URL")
+        db_url = os.getenv("DATABASE_URL", "").strip()
+
+        # Railway often uses postgres://, psycopg2 prefers postgresql://
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
 
         return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
 
-    # Local fallback
+    # Local fallback SQLite
     conn = sqlite3.connect("interns.db")
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def init_db():
     conn = connect()
     cur = conn.cursor()
 
-    # Common schema (works for both; types adjusted)
-    if os.getenv("DATABASE_URL"):
+    if is_postgres():
+        # Postgres schema
         cur.execute("""
         CREATE TABLE IF NOT EXISTS interns(
             id_info TEXT PRIMARY KEY,
@@ -45,6 +55,7 @@ def init_db():
             environment_review TEXT
         )
         """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS supervisor_feedback(
             feedback_id SERIAL PRIMARY KEY,
@@ -55,6 +66,7 @@ def init_db():
             created_at TIMESTAMP DEFAULT NOW()
         )
         """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS rag_records(
             record_id SERIAL PRIMARY KEY,
@@ -64,7 +76,9 @@ def init_db():
             created_at TIMESTAMP DEFAULT NOW()
         )
         """)
+
     else:
+        # SQLite schema
         cur.execute("""
         CREATE TABLE IF NOT EXISTS interns(
             id_info TEXT PRIMARY KEY,
@@ -86,6 +100,7 @@ def init_db():
             environment_review TEXT
         )
         """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS supervisor_feedback(
             feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,6 +111,7 @@ def init_db():
             created_at TEXT
         )
         """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS rag_records(
             record_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,5 +125,11 @@ def init_db():
     conn.commit()
     conn.close()
 
-def is_postgres() -> bool:
-    return bool(os.getenv("DATABASE_URL"))
+
+# ✅ Utility: safe dict conversion for both DBs
+def row_to_dict(row):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row
+    return dict(row)
