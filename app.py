@@ -130,12 +130,14 @@ def add_feedback(intern_id: str, body: FeedbackIn):
 # ✅ AI clone: saves feedback + returns AI output (RAG + history)
 @app.post("/interns/{intern_id}/ai-clone")
 def ai_clone(intern_id: str, body: FeedbackIn):
-    # store feedback
-    add_feedback(intern_id, body)
-
-    # generate AI response (make sure ai_clone.py uses correct placeholders too)
     try:
-        result = generate_ai_clone(intern_id, body.note)
+        # ✅ generate_ai_clone already saves feedback in DB (recommended)
+        result = generate_ai_clone(
+            intern_id=intern_id,
+            note=body.note,
+            supervisor_name=body.supervisor_name,
+            rating=body.rating
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI clone error: {str(e)}")
 
