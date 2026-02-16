@@ -105,3 +105,6 @@ def ai_clone(intern_id: str, body: FeedbackIn):
     add_feedback(intern_id, body)
     # generate result
     return generate_ai_clone(intern_id, body.note)
+@app.get("/health")
+def health():
+    return {"ok": True}
