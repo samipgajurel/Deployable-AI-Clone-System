@@ -108,3 +108,6 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+def is_postgres() -> bool:
+    return bool(os.getenv("DATABASE_URL"))

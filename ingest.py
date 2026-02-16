@@ -1,5 +1,5 @@
 import pandas as pd
-from db import connect
+from db import connect, is_postgres
 
 def run_ingest(csv_path):
     df = pd.read_csv(csv_path)
@@ -13,17 +13,23 @@ def run_ingest(csv_path):
     cur.execute("DELETE FROM supervisor_feedback")
     cur.execute("DELETE FROM interns")
 
-    insert_intern_sql = """
+    # ✅ Placeholders depend on DB
+    if is_postgres():
+        ph = "%s"
+    else:
+        ph = "?"
+
+    insert_intern_sql = f"""
         INSERT INTO interns(
             id_info, name, email, learning_skill, working_on_project,
             progress_month1, knowledge_gained, progress_rating_num
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES ({ph},{ph},{ph},{ph},{ph},{ph},{ph},{ph})
     """
 
-    insert_rag_sql = """
+    insert_rag_sql = f"""
         INSERT INTO rag_records(intern_id_info, record_type, text)
-        VALUES (%s,%s,%s)
+        VALUES ({ph},{ph},{ph})
     """
 
     for _, r in df.iterrows():
@@ -37,18 +43,16 @@ def run_ingest(csv_path):
             str(r.get("Working On Project", "")).strip(),
             str(r.get("Progress (1st months)", "")).strip(),
             str(r.get("Knowledge Gained", "")).strip(),
-            rating
+            float(rating),
         ))
 
-        text = f"{r['Intern Name']} working on {r['Working On Project']} learned {r['Knowledge Gained']}"
+        text = f"{r.get('Intern Name','')} working on {r.get('Working On Project','')} learned {r.get('Knowledge Gained','')}"
         cur.execute(insert_rag_sql, (
             str(r.get("ID Info", "")).strip(),
             "dataset",
-            text
+            text,
         ))
 
-    # Commit ONCE (important for Postgres)
     conn.commit()
     conn.close()
-
     return len(df)
