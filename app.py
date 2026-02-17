@@ -10,6 +10,21 @@ from ai_clone import generate_ai_clone
 
 app = FastAPI(title="Deployable AI Clone System")
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5500",
+        "http://localhost:5500",
+        # later when you deploy frontend, add its domain here
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.on_event("startup")
 def startup():
     init_db()
