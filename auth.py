@@ -1,34 +1,32 @@
 import os
 from datetime import datetime, timedelta
-from typing import Optional, Dict
-import jwt
-from jwt import JWTError
+from jose import jwt, JWTError
 from passlib.context import CryptContext
 
-JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME_SUPER_SECRET")
-JWT_ALG = "HS256"
-JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "10080"))  # 7 days
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# p
-def verify_password(password: str, hashed: str) -> bool:
-    password_bytes = password.encode("utf-8")[:72]
-    safe_password = password_bytes.decode("utf-8", errors="ignore")
-    return pwd_context.verify(safe_password, hashed)
+ALGO = "HS256"
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
+JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "43200"))  # 30 days
 
-    # # convert → bytes → trim → back to string
-    # password_bytes = password.encode("utf-8")[:72]
-    # safe_password = password_bytes.decode("utf-8", errors="ignore")
+def _bcrypt_safe(p: str) -> str:
+    p = (p or "")
+    b = p.encode("utf-8")[:72]
+    return b.decode("utf-8", errors="ignore")
 
-    # return pwd_context.hash(safe_password)
+def hash_password(p: str) -> str:
+    return pwd_context.hash(_bcrypt_safe(p))
 
+def verify_password(p: str, hashed: str) -> bool:
+    return pwd_context.verify(_bcrypt_safe(p), hashed)
 
-def create_token(payload: Dict) -> str:
+def create_token(payload: dict) -> str:
     exp = datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MIN)
-    payload = {**payload, "exp": exp}
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+    to_encode = {**payload, "exp": exp}
+    return jwt.encode(to_encode, JWT_SECRET, algorithm=ALGO)
 
-def decode_token(token: str) -> Optional[Dict]:
+def decode_token(token: str) -> dict:
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        return jwt.decode(token, JWT_SECRET, algorithms=[ALGO])
     except JWTError:
-        return None
+        return {}
