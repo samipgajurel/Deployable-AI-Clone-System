@@ -1,5 +1,8 @@
 fastapi
 uvicorn
-pandas
 python-multipart
+pandas
+numpy
 psycopg2-binary
+python-jose[cryptography]
+passlib[bcrypt]
