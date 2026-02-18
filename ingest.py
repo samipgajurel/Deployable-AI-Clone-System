@@ -1,80 +1,78 @@
 import pandas as pd
-from db import connect, is_postgres
+import secrets
+import string
+from db import connect, is_postgres, ph
+from auth import hash_password
 
-def run_ingest(csv_path):
+def generate_password(length=10):
+    alphabet = string.ascii_letters + string.digits + "!@#$%*"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+def run_ingest(csv_path: str):
     df = pd.read_csv(csv_path)
-
-    # Keep only valid intern rows
     df = df[df["Intern Name"].notna()]
-
-    # ✅ Clean ID Info and drop duplicates to avoid unique constraint error
-    df["ID Info"] = df["ID Info"].astype(str).str.strip()
-    df = df[df["ID Info"].notna() & (df["ID Info"] != "")]
-    df = df.drop_duplicates(subset=["ID Info"], keep="first")
 
     conn = connect()
     cur = conn.cursor()
+    p = ph()
 
-    # Clear old data first
-    cur.execute("DELETE FROM rag_records")
-    cur.execute("DELETE FROM supervisor_feedback")
+    # clear interns (keep users/tasks if you want; here we rebuild interns)
     cur.execute("DELETE FROM interns")
 
-    # ✅ Build DB-specific SQL
-    if is_postgres():
-        insert_intern_sql = """
-            INSERT INTO interns(
-                id_info, name, email, learning_skill, working_on_project,
-                progress_month1, knowledge_gained, progress_rating_num
-            )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (id_info) DO UPDATE SET
-                name = EXCLUDED.name,
-                email = EXCLUDED.email,
-                learning_skill = EXCLUDED.learning_skill,
-                working_on_project = EXCLUDED.working_on_project,
-                progress_month1 = EXCLUDED.progress_month1,
-                knowledge_gained = EXCLUDED.knowledge_gained,
-                progress_rating_num = EXCLUDED.progress_rating_num
-        """
-        insert_rag_sql = """
-            INSERT INTO rag_records(intern_id_info, record_type, text)
-            VALUES (%s,%s,%s)
-        """
-    else:
-        # SQLite
-        insert_intern_sql = """
-            INSERT OR REPLACE INTO interns(
-                id_info, name, email, learning_skill, working_on_project,
-                progress_month1, knowledge_gained, progress_rating_num
-            )
-            VALUES (?,?,?,?,?,?,?,?)
-        """
-        insert_rag_sql = """
-            INSERT INTO rag_records(intern_id_info, record_type, text)
-            VALUES (?,?,?)
-        """
+    created_creds = []
+
+    insert_intern = f"""
+    INSERT INTO interns(
+      id_info, name, email, learning_skill, working_on_project,
+      progress_month1, knowledge_gained, progress_rating_num, status
+    )
+    VALUES ({p},{p},{p},{p},{p},{p},{p},{p},'pending')
+    """
 
     for _, r in df.iterrows():
-        rating = str(r.get("Progress Rating", "")).count("★")
-
-        intern_id = str(r.get("ID Info", "")).strip()
+        id_info = str(r.get("ID Info", "")).strip()
         name = str(r.get("Intern Name", "")).strip()
+        email = str(r.get("E-mail", "")).strip()
 
-        cur.execute(insert_intern_sql, (
-            intern_id,
-            name,
-            str(r.get("E-mail", "")).strip(),
-            str(r.get("Learning Skill (Internship)", "")).strip(),
-            str(r.get("Working On Project", "")).strip(),
-            str(r.get("Progress (1st months)", "")).strip(),
-            str(r.get("Knowledge Gained", "")).strip(),
-            float(rating),
-        ))
+        learning = str(r.get("Learning Skill (Internship)", "")).strip()
+        project = str(r.get("Working On Project", "")).strip()
+        prog = str(r.get("Progress (1st months)", "")).strip()
+        know = str(r.get("Knowledge Gained", "")).strip()
+        rating = float(str(r.get("Progress Rating", "")).count("★"))
 
-        text = f"{name} working on {r.get('Working On Project','')} learned {r.get('Knowledge Gained','')}"
-        cur.execute(insert_rag_sql, (intern_id, "dataset", text))
+        cur.execute(insert_intern, (id_info, name, email, learning, project, prog, know, rating))
+
+        username = email if email else id_info
+        plain = generate_password()
+        hashed = hash_password(plain)
+
+        # create intern user if not exists
+        if is_postgres():
+            cur.execute("SELECT id FROM users WHERE username=%s", (username,))
+        else:
+            cur.execute("SELECT id FROM users WHERE username=?", (username,))
+        exists = cur.fetchone()
+
+        if not exists:
+            if is_postgres():
+                cur.execute("""
+                  INSERT INTO users(username, full_name, role, password_hash, intern_id_info)
+                  VALUES (%s,%s,'intern',%s,%s)
+                """, (username, name, hashed, id_info))
+            else:
+                cur.execute("""
+                  INSERT INTO users(username, full_name, role, password_hash, intern_id_info, created_at)
+                  VALUES (?,?,?,?,?,datetime('now'))
+                """, (username, name, "intern", hashed, id_info))
+
+            created_creds.append({
+                "role": "intern",
+                "username": username,
+                "password": plain,
+                "intern_id": id_info,
+                "name": name
+            })
 
     conn.commit()
     conn.close()
-    return int(len(df))
+    return int(len(df)), created_creds
