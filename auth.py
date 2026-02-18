@@ -9,20 +9,17 @@ JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME_SUPER_SECRET")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "10080"))  # 7 days
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-def hash_password(password: str) -> str:
-    """
-    bcrypt only supports 72 bytes max.
-    Railway env vars are often longer → must truncate safely.
-    """
-    if not password:
-        password = "defaultpass"
-
-    # convert → bytes → trim → back to string
+# p
+def verify_password(password: str, hashed: str) -> bool:
     password_bytes = password.encode("utf-8")[:72]
     safe_password = password_bytes.decode("utf-8", errors="ignore")
+    return pwd_context.verify(safe_password, hashed)
 
-    return pwd_context.hash(safe_password)
+    # # convert → bytes → trim → back to string
+    # password_bytes = password.encode("utf-8")[:72]
+    # safe_password = password_bytes.decode("utf-8", errors="ignore")
+
+    # return pwd_context.hash(safe_password)
 
 
 def create_token(payload: Dict) -> str:
