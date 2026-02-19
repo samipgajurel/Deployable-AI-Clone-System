@@ -4,17 +4,30 @@ import sqlite3
 def is_postgres() -> bool:
     return bool(os.getenv("DATABASE_URL"))
 
+def ph() -> str:
+    """SQL placeholder depending on DB driver."""
+    return "%s" if is_postgres() else "?"
+
 def connect():
+    """
+    - Railway Postgres: uses DATABASE_URL
+    - Local: sqlite interns.db
+    """
     if is_postgres():
         import psycopg2
         from psycopg2.extras import RealDictCursor
+
         db_url = os.getenv("DATABASE_URL", "").strip()
+        # Some providers still output postgres:// which psycopg2 accepts, but we normalize anyway
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
+
         return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
 
     conn = sqlite3.connect("interns.db", check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # ✅ SQLite: foreign keys are OFF by default
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 def row_to_dict(r):
@@ -24,14 +37,12 @@ def row_to_dict(r):
         return r
     return dict(r)
 
-def ph():
-    return "%s" if is_postgres() else "?"
-
 def init_db():
     conn = connect()
     cur = conn.cursor()
 
     if is_postgres():
+        # -------------------- INTERNS --------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS interns(
             id_info TEXT PRIMARY KEY,
@@ -42,58 +53,83 @@ def init_db():
             progress_month1 TEXT,
             knowledge_gained TEXT,
             progress_rating_num DOUBLE PRECISION,
-            status TEXT DEFAULT 'pending'
+            status TEXT DEFAULT 'pending'  -- pending|active|completed
         );
         """)
 
+        # -------------------- USERS --------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users(
-            id SERIAL PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
+            id BIGSERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,    -- use email as username (recommended)
             full_name TEXT,
-            role TEXT NOT NULL, -- admin|supervisor|intern
+            role TEXT NOT NULL,              -- admin|supervisor|intern
             password_hash TEXT NOT NULL,
-            intern_id_info TEXT NULL,
-            supervisor_user_id INTEGER NULL,
+            intern_id_info TEXT NULL REFERENCES interns(id_info) ON DELETE SET NULL,
+            supervisor_user_id BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
             active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT NOW()
         );
         """)
 
+        # -------------------- TASKS --------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS tasks(
-            id SERIAL PRIMARY KEY,
+            id BIGSERIAL PRIMARY KEY,
             title TEXT NOT NULL,
             description TEXT,
-            status TEXT DEFAULT 'todo', -- todo|in_progress|done
+            status TEXT DEFAULT 'todo',         -- todo|in_progress|done
             due_date TIMESTAMP NULL,
-            assigned_to_user_id INTEGER NOT NULL,
-            assigned_by_user_id INTEGER NOT NULL,
+            assigned_to_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            assigned_by_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             created_at TIMESTAMP DEFAULT NOW()
         );
         """)
 
         cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks(assigned_to_user_id);
+        """)
+
+        # -------------------- TASK UPDATES --------------------
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS task_updates(
-            id SERIAL PRIMARY KEY,
-            task_id INTEGER NOT NULL,
-            intern_user_id INTEGER NOT NULL,
+            id BIGSERIAL PRIMARY KEY,
+            task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            intern_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             message TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT NOW()
         );
         """)
 
+        # -------------------- SUPERVISOR FEEDBACK --------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS supervisor_feedback(
-            id SERIAL PRIMARY KEY,
-            intern_id_info TEXT NOT NULL,
+            id BIGSERIAL PRIMARY KEY,
+            intern_id_info TEXT NOT NULL REFERENCES interns(id_info) ON DELETE CASCADE,
             supervisor_name TEXT,
             note TEXT,
             rating INTEGER,
             created_at TIMESTAMP DEFAULT NOW()
         );
         """)
+
+        # -------------------- RAG RECORDS (MISSING IN YOUR FILE) --------------------
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS rag_records(
+            id BIGSERIAL PRIMARY KEY,
+            intern_id_info TEXT NOT NULL REFERENCES interns(id_info) ON DELETE CASCADE,
+            record_type TEXT DEFAULT 'dataset',
+            text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+        """)
+
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_rag_intern ON rag_records(intern_id_info);
+        """)
+
     else:
+        # -------------------- SQLITE VERSION --------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS interns(
             id_info TEXT PRIMARY KEY,
@@ -115,10 +151,10 @@ def init_db():
             full_name TEXT,
             role TEXT NOT NULL,
             password_hash TEXT NOT NULL,
-            intern_id_info TEXT,
-            supervisor_user_id INTEGER,
+            intern_id_info TEXT REFERENCES interns(id_info) ON DELETE SET NULL,
+            supervisor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             active INTEGER DEFAULT 1,
-            created_at TEXT
+            created_at TEXT DEFAULT (datetime('now'))
         );
         """)
 
@@ -129,31 +165,50 @@ def init_db():
             description TEXT,
             status TEXT DEFAULT 'todo',
             due_date TEXT,
-            assigned_to_user_id INTEGER NOT NULL,
-            assigned_by_user_id INTEGER NOT NULL,
-            created_at TEXT
+            assigned_to_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            assigned_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT DEFAULT (datetime('now'))
         );
+        """)
+
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks(assigned_to_user_id);
         """)
 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS task_updates(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id INTEGER NOT NULL,
-            intern_user_id INTEGER NOT NULL,
+            task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            intern_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             message TEXT NOT NULL,
-            created_at TEXT
+            created_at TEXT DEFAULT (datetime('now'))
         );
         """)
 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS supervisor_feedback(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            intern_id_info TEXT NOT NULL,
+            intern_id_info TEXT NOT NULL REFERENCES interns(id_info) ON DELETE CASCADE,
             supervisor_name TEXT,
             note TEXT,
             rating INTEGER,
-            created_at TEXT
+            created_at TEXT DEFAULT (datetime('now'))
         );
+        """)
+
+        # ✅ add missing rag_records
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS rag_records(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            intern_id_info TEXT NOT NULL REFERENCES interns(id_info) ON DELETE CASCADE,
+            record_type TEXT DEFAULT 'dataset',
+            text TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        """)
+
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_rag_intern ON rag_records(intern_id_info);
         """)
 
     conn.commit()
