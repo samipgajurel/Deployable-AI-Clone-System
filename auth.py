@@ -1,32 +1,42 @@
 import os
 from datetime import datetime, timedelta
+from typing import Any, Dict
+
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-ALGO = "HS256"
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
-JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "43200"))  # 30 days
+JWT_ALG = "HS256"
+JWT_EXP_MIN = int(os.getenv("JWT_EXP_MIN", "10080"))  # 7 days
 
-def _bcrypt_safe(p: str) -> str:
-    p = (p or "")
-    b = p.encode("utf-8")[:72]
-    return b.decode("utf-8", errors="ignore")
+# ✅ Use PBKDF2 (no 72-byte limit, stable on Windows + Railway)
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
 
 def hash_password(p: str) -> str:
-    return pwd_context.hash(_bcrypt_safe(p))
+    # keep it safe even if env passes huge text
+    p = (p or "").strip()
+    if len(p) > 300:
+        p = p[:300]
+    return pwd_context.hash(p)
 
-def verify_password(p: str, hashed: str) -> bool:
-    return pwd_context.verify(_bcrypt_safe(p), hashed)
 
-def create_token(payload: dict) -> str:
-    exp = datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MIN)
-    to_encode = {**payload, "exp": exp}
-    return jwt.encode(to_encode, JWT_SECRET, algorithm=ALGO)
-
-def decode_token(token: str) -> dict:
+def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[ALGO])
+        return pwd_context.verify((plain or "").strip(), hashed)
+    except Exception:
+        return False
+
+
+def create_token(payload: Dict[str, Any]) -> str:
+    exp = datetime.utcnow() + timedelta(minutes=JWT_EXP_MIN)
+    data = dict(payload)
+    data["exp"] = exp
+    return jwt.encode(data, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def decode_token(token: str) -> Dict[str, Any]:
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except JWTError:
-        return {}
+        raise ValueError("Invalid token")
